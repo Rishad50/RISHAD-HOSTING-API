@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify
+from flask import Flask, render_template, request, redirect, url_for, jsonify, send_file
 import json
 import os
 import subprocess
@@ -14,26 +14,7 @@ import psutil
 import re
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
-
-# ============================================
-# যেকোনো HTML ফাইল থেকে API অ্যাক্সেসের পারমিশন (CORS)
-# ============================================
-@app.before_request
-def handle_preflight():
-    if request.method == "OPTIONS":
-        response = app.make_default_options_response()
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
-        return response
-
-@app.after_request
-def add_cors_headers(response):
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
-    return response
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB Upload Limit
 
 SERVERS_FILE = 'servers.json'
 BOTS_DIR = 'bots'
@@ -315,6 +296,72 @@ def server_panel(server_id):
     return render_template('home.html', current_server=servers[server_id])
 
 # ============================================
+# সার্ভার ম্যানেজমেন্ট API (Server CRUD)
+# ============================================
+
+@app.route('/api/servers', methods=['GET'])
+def api_get_all_servers():
+    servers = load_servers()
+    return jsonify({'status': 'success', 'servers': list(servers.values())})
+
+@app.route('/api/servers/create', methods=['POST'])
+def api_create_server():
+    data = request.get_json() or {}
+    server_id = data.get('server_id', '').strip().lower()
+    
+    if not server_id:
+        server_id = 'srv-' + str(uuid.uuid4())[:8]
+        
+    server_id = re.sub(r'[^a-zA-Z0-9_-]', '', server_id)
+    
+    servers = load_servers()
+    if server_id in servers:
+        return jsonify({'status': 'error', 'message': 'Server ID already exists!'}), 400
+
+    server_dir = get_server_dir(server_id)
+    create_default_files(server_dir)
+    
+    servers[server_id] = {
+        'server_id': server_id,
+        'type': data.get('type', 'python'),
+        'ram': data.get('ram', '1GB'),
+        'disk': data.get('disk', '1GB'),
+        'status': 'stopped',
+        'pid': None,
+        'created': str(datetime.now()),
+        'main_file': data.get('main_file', 'main.py'),
+        'requirements_file': data.get('requirements_file', 'requirements.txt'),
+        'cpu_limit': int(data.get('cpu_limit', 80)),
+        'rate_limit_exceeded': False,
+        'stopped_by_user': False
+    }
+    save_servers(servers)
+    return jsonify({'status': 'success', 'message': 'Server created successfully', 'server': servers[server_id]})
+
+@app.route('/api/servers/delete/<server_id>', methods=['DELETE'])
+def api_delete_server(server_id):
+    if server_id == 'default':
+        return jsonify({'status': 'error', 'message': 'Cannot delete default server'}), 400
+
+    servers = load_servers()
+    if server_id not in servers:
+        return jsonify({'status': 'error', 'message': 'Server not found'}), 404
+
+    server = servers[server_id]
+    if server.get('pid'):
+        stop_bot_process(server['pid'])
+    RUNNING_PROCESSES.pop(server_id, None)
+
+    server_dir = os.path.join(BOTS_DIR, server_id)
+    if os.path.exists(server_dir):
+        shutil.rmtree(server_dir, ignore_errors=True)
+
+    del servers[server_id]
+    save_servers(servers)
+    
+    return jsonify({'status': 'success', 'message': f'Server {server_id} deleted successfully'})
+
+# ============================================
 # বট কন্ট্রোল API (Process Control)
 # ============================================
 
@@ -526,6 +573,15 @@ def api_upload(server_id):
             file.save(os.path.join(target_dir, file.filename))
     return jsonify({'success': True, 'message': 'Uploaded successfully'})
 
+@app.route('/api/download/<server_id>', methods=['GET'])
+def api_download_file(server_id):
+    file_rel_path = request.args.get('path', '')
+    filepath = os.path.normpath(os.path.join(get_server_dir(server_id), file_rel_path.lstrip('/\\')))
+    
+    if os.path.exists(filepath) and os.path.isfile(filepath):
+        return send_file(filepath, as_attachment=True)
+    return jsonify({'error': 'File not found'}), 404
+
 @app.route('/api/create_folder/<server_id>', methods=['POST'])
 def api_create_folder(server_id):
     data = request.get_json() or {}
@@ -568,6 +624,29 @@ def api_extract(server_id):
         except Exception as e: 
             return jsonify({'status': 'error', 'message': str(e)}), 500
     return jsonify({'status': 'error', 'message': 'Invalid ZIP file'}), 400
+
+@app.route('/api/zip/<server_id>', methods=['POST'])
+def api_zip_files(server_id):
+    data = request.get_json() or {}
+    folder_rel = data.get('folder', '')
+    zip_name = data.get('zip_name', 'archive.zip')
+    
+    server_dir = get_server_dir(server_id)
+    source_dir = os.path.normpath(os.path.join(server_dir, folder_rel.lstrip('/\\')))
+    zip_path = os.path.normpath(os.path.join(server_dir, zip_name))
+
+    try:
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for root, _, files in os.walk(source_dir):
+                for file in files:
+                    full_p = os.path.join(root, file)
+                    if full_p == zip_path:
+                        continue
+                    arcname = os.path.relpath(full_p, source_dir)
+                    zf.write(full_p, arcname)
+        return jsonify({'status': 'success', 'message': f'Created {zip_name}'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/get_startup/<server_id>')
 def api_get_startup(server_id):
