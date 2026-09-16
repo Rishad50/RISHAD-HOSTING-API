@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
 import os
@@ -15,7 +15,9 @@ import psutil
 import re
 
 app = Flask(__name__)
-CORS(app)
+
+# সব ডোমেন থেকে API ব্যবহারের অনুমতি (CORS)
+CORS(app, resources={r"/*": {"origins": "*"}})
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 SERVERS_FILE = 'servers.json'
@@ -265,16 +267,20 @@ def get_process_stats(pid):
         return {'cpu_percent': 0, 'ram_display': '0 MB'}
 
 # ============================================
-# পেজ রাউটস (Page Routes)
+# রুট ও হেলথ চেক API
 # ============================================
 
 @app.route('/')
-def home_redirect():
-    default_srv = get_or_create_default_server()
-    return redirect(url_for('server_panel', server_id=default_srv['server_id']))
+def api_home():
+    return jsonify({
+        'status': 'online',
+        'message': 'Rishad Hosting Backend API is Running',
+        'version': '1.0.0',
+        'timestamp': str(datetime.now())
+    })
 
-@app.route('/<server_id>')
-def server_panel(server_id):
+@app.route('/api/server/<server_id>')
+def api_get_server(server_id):
     servers = load_servers()
     if server_id not in servers:
         server_dir = get_server_dir(server_id)
@@ -294,8 +300,7 @@ def server_panel(server_id):
             'stopped_by_user': False
         }
         save_servers(servers)
-    
-    return render_template('home.html', current_server=servers[server_id])
+    return jsonify(servers[server_id])
 
 # ============================================
 # বট কন্ট্রোল API (Process Control)
