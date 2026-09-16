@@ -1,5 +1,5 @@
-
 from flask import Flask, render_template, request, redirect, url_for, jsonify
+from flask_cors import CORS
 import json
 import os
 import subprocess
@@ -15,6 +15,7 @@ import psutil
 import re
 
 app = Flask(__name__)
+CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 SERVERS_FILE = 'servers.json'
@@ -571,88 +572,6 @@ def api_set_startup(server_id):
         save_servers(servers)
         return jsonify({'success': True, 'message': 'Startup config saved'})
     return jsonify({'error': 'Not found'}), 404
-
-# ============================================
-# GitHub Deploy API
-# ============================================
-
-@app.route('/api/github/deploy/<server_id>', methods=['POST'])
-def api_github_deploy(server_id):
-    data = request.get_json() or {}
-    repo_url = data.get('repo_url', '').strip()
-    access_token = data.get('access_token', '').strip()
-    is_private = data.get('is_private', False)
-    
-    if not repo_url:
-        return jsonify({'status': 'error', 'msg': 'Repository URL is required!'}), 400
-    
-    server_dir = get_server_dir(server_id)
-    log_file = os.path.join(server_dir, 'github_deploy.log')
-    
-    def deploy_thread():
-        try:
-            import requests
-            def deploy_log(msg):
-                with open(log_file, 'a', encoding='utf-8') as f:
-                    f.write(f"[{datetime.now().strftime('%I:%M:%S %p')}] {msg}\n")
-            
-            clean_url = repo_url.replace('.git', '').rstrip('/')
-            parts = clean_url.split('github.com/')[-1].split('/')
-            owner, repo = parts[0], parts[1]
-            branch = parts[3] if len(parts) > 3 and parts[2] == 'tree' else 'main'
-            
-            api_url = f"https://api.github.com/repos/{owner}/{repo}/zipball/{branch}"
-            headers = {'Accept': 'application/vnd.github.v3+json'}
-            if is_private and access_token:
-                headers['Authorization'] = f'token {access_token}'
-            
-            response = requests.get(api_url, headers=headers, stream=True, timeout=60)
-            if response.status_code == 200:
-                temp_zip = os.path.join(server_dir, '_github_temp.zip')
-                with open(temp_zip, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                with zipfile.ZipFile(temp_zip, 'r') as zf:
-                    for member in zf.namelist():
-                        relative_path = '/'.join(member.split('/')[1:])
-                        if not relative_path: 
-                            continue
-                        target_path = os.path.join(server_dir, relative_path)
-                        if member.endswith('/'):
-                            os.makedirs(target_path, exist_ok=True)
-                        else:
-                            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                            with zf.open(member) as source, open(target_path, 'wb') as target:
-                                shutil.copyfileobj(source, target)
-                if os.path.exists(temp_zip): 
-                    os.remove(temp_zip)
-                deploy_log("Deployment completed successfully!")
-            else:
-                deploy_log(f"GitHub Error: HTTP {response.status_code}")
-        except Exception as e:
-            deploy_log(f"Deployment Error: {str(e)}")
-            
-    threading.Thread(target=deploy_thread, daemon=True).start()
-    return jsonify({'status': 'success', 'msg': 'Deployment started'})
-
-@app.route('/api/github/logs/<server_id>')
-def api_github_logs(server_id):
-    log_file = os.path.join(get_server_dir(server_id), 'github_deploy.log')
-    logs = "> Ready for deployment..."
-    if os.path.exists(log_file):
-        try:
-            with open(log_file, 'r', encoding='utf-8') as f: 
-                logs = f.read()
-        except Exception: 
-            pass
-    return jsonify({'logs': logs})
-
-@app.route('/api/github/clear_logs/<server_id>', methods=['POST'])
-def api_github_clear_logs(server_id):
-    log_file = os.path.join(get_server_dir(server_id), 'github_deploy.log')
-    if os.path.exists(log_file): 
-        os.remove(log_file)
-    return jsonify({'status': 'success'})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
