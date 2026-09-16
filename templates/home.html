@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Panel - {{ current_server.server_id }}</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .terminal-scroll::-webkit-scrollbar { width: 6px; }
+        .terminal-scroll::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+    </style>
+</head>
+<body class="bg-gray-950 text-gray-100 font-sans min-h-screen">
+
+    <!-- Navbar -->
+    <header class="border-b border-gray-800 bg-gray-900/60 backdrop-blur px-6 py-4 flex flex-wrap justify-between items-center gap-4">
+        <div class="flex items-center space-x-3">
+            <div class="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/30">
+                <i class="fa-solid fa-terminal"></i>
+            </div>
+            <div>
+                <h1 class="font-semibold text-lg leading-none">Server: <span class="text-indigo-400" id="serverName">{{ current_server.server_id }}</span></h1>
+                <p class="text-xs text-gray-400 mt-1">Status: <span id="statusBadge" class="font-bold text-yellow-400 uppercase">Checking...</span></p>
+            </div>
+        </div>
+
+        <!-- Metrics -->
+        <div class="flex items-center gap-4 text-sm bg-gray-900 border border-gray-800 px-4 py-2 rounded-lg">
+            <div><i class="fa-solid fa-microchip text-blue-400 mr-1"></i> CPU: <span id="cpuUsage" class="font-mono text-gray-300">0%</span></div>
+            <div class="border-l border-gray-700 h-4"></div>
+            <div><i class="fa-solid fa-memory text-purple-400 mr-1"></i> RAM: <span id="ramUsage" class="font-mono text-gray-300">0 MB</span></div>
+        </div>
+
+        <!-- Controls -->
+        <div class="flex items-center gap-2">
+            <button onclick="controlServer('start')" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition flex items-center gap-2">
+                <i class="fa-solid fa-play"></i> Start
+            </button>
+            <button onclick="controlServer('stop')" class="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-sm font-medium transition flex items-center gap-2">
+                <i class="fa-solid fa-stop"></i> Stop
+            </button>
+            <button onclick="controlServer('restart')" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-sm font-medium transition flex items-center gap-2">
+                <i class="fa-solid fa-rotate"></i> Restart
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="p-6 max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+        <!-- Left 2 Cols: Terminal & Logs -->
+        <div class="lg:col-span-2 flex flex-col gap-4">
+            <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-2xl flex flex-col h-[520px]">
+                <div class="bg-gray-800/80 px-4 py-2.5 flex justify-between items-center border-b border-gray-700">
+                    <span class="text-xs font-mono text-gray-400"><i class="fa-solid fa-code mr-1"></i> Live Terminal Console</span>
+                    <button onclick="clearConsole()" class="text-xs text-gray-400 hover:text-red-400 transition">
+                        <i class="fa-regular fa-trash-can mr-1"></i> Clear Log
+                    </button>
+                </div>
+                <!-- Console Screen -->
+                <div id="terminal" class="flex-1 p-4 bg-black/80 font-mono text-xs text-green-400 overflow-y-auto terminal-scroll">
+                    <pre id="logOutput">Connecting to console logs...</pre>
+                </div>
+                <!-- Command Bar -->
+                <form onsubmit="sendCommand(event)" class="border-t border-gray-800 bg-gray-900 p-2 flex gap-2">
+                    <span class="p-2 text-gray-500 font-mono select-none">$</span>
+                    <input type="text" id="cmdInput" placeholder="টাইপ করুন (যেমন: python main.py অথবা ইনপুট দিন)..." 
+                        class="flex-1 bg-transparent text-sm font-mono text-gray-200 outline-none placeholder:text-gray-600">
+                    <button type="submit" class="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 text-xs rounded text-gray-300 font-medium">Send</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Right 1 Col: File Manager & Config -->
+        <div class="flex flex-col gap-6">
+
+            <!-- File Manager -->
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-5 shadow-xl">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-sm font-semibold text-gray-200"><i class="fa-regular fa-folder mr-2 text-indigo-400"></i>Files</h2>
+                    <label class="cursor-pointer px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-xs rounded text-white font-medium">
+                        <i class="fa-solid fa-cloud-arrow-up mr-1"></i> Upload
+                        <input type="file" id="fileUploadInput" onchange="uploadFile()" class="hidden">
+                    </label>
+                </div>
+
+                <div id="fileList" class="space-y-1 max-h-48 overflow-y-auto terminal-scroll text-sm">
+                    <p class="text-xs text-gray-500">লোড হচ্ছে...</p>
+                </div>
+            </div>
+
+            <!-- Startup Configuration -->
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-5 shadow-xl">
+                <h2 class="text-sm font-semibold text-gray-200 mb-3"><i class="fa-solid fa-gear mr-2 text-amber-400"></i>Startup Settings</h2>
+                <div class="space-y-3">
+                    <div>
+                        <label class="text-xs text-gray-400">Main Executable File</label>
+                        <input type="text" id="mainFile" class="w-full mt-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-200 outline-none focus:border-indigo-500">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400">Requirements File</label>
+                        <input type="text" id="reqFile" class="w-full mt-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-200 outline-none focus:border-indigo-500">
+                    </div>
+                    <button onclick="saveStartup()" class="w-full py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded text-xs text-indigo-400 font-medium">
+                        Save Config
+                    </button>
+                </div>
+            </div>
+
+            <!-- GitHub Deploy -->
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-5 shadow-xl">
+                <h2 class="text-sm font-semibold text-gray-200 mb-3"><i class="fa-brands fa-github mr-2 text-white"></i>GitHub Deploy</h2>
+                <div class="space-y-2">
+                    <input type="text" id="gitRepo" placeholder="https://github.com/user/repo" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-200 outline-none focus:border-indigo-500">
+                    <button onclick="deployGitHub()" class="w-full py-1.5 bg-indigo-700 hover:bg-indigo-600 rounded text-xs text-white font-medium">
+                        Deploy Repo
+                    </button>
+                </div>
+            </div>
+
+        </div>
+
+    </main>
+
+    <!-- JavaScript Logic -->
+    <script>
+        // Server ID পাইথন টেমপ্লেট থেকে পাওয়া যাবে, না পেলে URL পাথ থেকে নিবে
+        const SERVER_ID = "{{ current_server.server_id }}" || window.location.pathname.replace('/', '') || 'default';
+
+        // ১. স্ট্যাটাস ও মেট্রিক্স আপডেট
+        async function updateStats() {
+            try {
+                const res = await fetch(`/api/stats/${SERVER_ID}`);
+                const data = await res.json();
+                
+                document.getElementById('cpuUsage').innerText = data.cpu || '0%';
+                document.getElementById('ramUsage').innerText = data.ram || '0 MB';
+
+                const badge = document.getElementById('statusBadge');
+                if (data.status === 'running') {
+                    badge.innerText = 'Online';
+                    badge.className = 'font-bold text-emerald-400 uppercase';
+                } else {
+                    badge.innerText = 'Stopped';
+                    badge.className = 'font-bold text-rose-500 uppercase';
+                }
+            } catch (e) {
+                console.error("Stats error", e);
+            }
+        }
+
+        // ২. লাইভ টার্মিনাল লগ আনা
+        async function fetchLogs() {
+            try {
+                const res = await fetch(`/api/logs/${SERVER_ID}`);
+                const data = await res.json();
+                const logBox = document.getElementById('logOutput');
+                
+                if (data.logs) {
+                    logBox.textContent = data.logs;
+                    const terminal = document.getElementById('terminal');
+                    terminal.scrollTop = terminal.scrollHeight;
+                } else {
+                    logBox.textContent = "Server is idle. Press Start to run.";
+                }
+            } catch (e) {
+                console.error("Logs error", e);
+            }
+        }
+
+        // ৩. স্টার্ট/স্টপ/রিস্টার্ট কন্ট্রোল
+        async function controlServer(action) {
+            try {
+                const res = await fetch(`/api/${action}/${SERVER_ID}`, { method: 'POST' });
+                const data = await res.json();
+                alert(data.message || data.status);
+                updateStats();
+                fetchLogs();
+            } catch (e) {
+                alert("Request failed!");
+            }
+        }
+
+        // ৪. কমান্ড পাঠানো
+        async function sendCommand(e) {
+            e.preventDefault();
+            const input = document.getElementById('cmdInput');
+            const cmd = input.value.trim();
+            if (!cmd) return;
+
+            input.value = '';
+            try {
+                await fetch('/api/command', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ cmd: cmd, server_id: SERVER_ID })
+                });
+                fetchLogs();
+            } catch (e) {
+                alert("Error sending command!");
+            }
+        }
+
+        // ৫. কনসোল ক্লিয়ার
+        async function clearConsole() {
+            await fetch(`/api/clear_logs/${SERVER_ID}`, { method: 'POST' });
+            document.getElementById('logOutput').textContent = '';
+        }
+
+        // ৬. ফাইল লোড করা
+        async function loadFiles() {
+            try {
+                const res = await fetch(`/api/files/${SERVER_ID}`);
+                const data = await res.json();
+                const listEl = document.getElementById('fileList');
+                listEl.innerHTML = '';
+
+                if (!data.files || data.files.length === 0) {
+                    listEl.innerHTML = '<p class="text-xs text-gray-500">কোন ফাইল নেই</p>';
+                    return;
+                }
+
+                data.files.forEach(f => {
+                    const row = document.createElement('div');
+                    row.className = 'flex justify-between items-center py-1 border-b border-gray-800 text-xs';
+                    row.innerHTML = `
+                        <span class="truncate ${f.is_dir ? 'text-amber-400 font-semibold' : 'text-gray-300'}">
+                            <i class="fa-solid ${f.is_dir ? 'fa-folder' : 'fa-file'} mr-1.5 opacity-60"></i>${f.name}
+                        </span>
+                        <div class="flex items-center gap-2">
+                            <span class="text-gray-500">${f.size_formatted}</span>
+                            <button onclick="deleteFile('${f.name}')" class="text-gray-500 hover:text-red-400"><i class="fa-solid fa-trash"></i></button>
+                        </div>
+                    `;
+                    listEl.appendChild(row);
+                });
+            } catch (e) {
+                console.error("Files error", e);
+            }
+        }
+
+        // ৭. ফাইল আপলোড
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileUploadInput');
+            if (!fileInput.files.length) return;
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            await fetch(`/api/upload/${SERVER_ID}`, { method: 'POST', body: formData });
+            fileInput.value = '';
+            loadFiles();
+        }
+
+        // ৮. ফাইল ডিলিট
+        async function deleteFile(filename) {
+            if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
+            await fetch(`/api/file/${SERVER_ID}`, {
+                method: 'DELETE',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ filename: filename })
+            });
+            loadFiles();
+        }
+
+        // ৯. Startup কনফিগ লোড ও সেভ
+        async function loadStartup() {
+            const res = await fetch(`/api/get_startup/${SERVER_ID}`);
+            const data = await res.json();
+            document.getElementById('mainFile').value = data.main_file || 'main.py';
+            document.getElementById('reqFile').value = data.req_file || 'requirements.txt';
+        }
+
+        async function saveStartup() {
+            const main_file = document.getElementById('mainFile').value;
+            const req_file = document.getElementById('reqFile').value;
+            await fetch(`/api/set_startup/${SERVER_ID}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ main_file, req_file })
+            });
+            alert('Settings Saved!');
+        }
+
+        // ১০. GitHub Deploy
+        async function deployGitHub() {
+            const repo_url = document.getElementById('gitRepo').value.trim();
+            if(!repo_url) return alert("GitHub URL দিন!");
+            await fetch(`/api/github/deploy/${SERVER_ID}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ repo_url })
+            });
+            alert("Deployment Started! Check logs.");
+        }
+
+        // টাইমার চালু করা (প্রতি ২ সেকেন্ড পর পর লগ ও স্ট্যাটাস রিফ্রেশ হবে)
+        setInterval(fetchLogs, 2000);
+        setInterval(updateStats, 2000);
+
+        // পেজ লোড হলে কল হবে
+        window.onload = () => {
+            updateStats();
+            fetchLogs();
+            loadFiles();
+            loadStartup();
+        };
+    </script>
+</body>
+</html>
